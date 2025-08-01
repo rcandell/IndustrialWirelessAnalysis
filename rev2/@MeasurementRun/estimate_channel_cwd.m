@@ -35,6 +35,14 @@ files = dir(pattern);
 Cstats = {};
 Cstats_ii = 1;
 
+% setup output directories
+stats_dir = 'stats';
+fig_dir = 'figs';
+png_dir = 'png';
+if ~exist(stats_dir,'dir'), [status, msg, msgID] = mkdir(stats_dir), end
+if ~exist(fig_dir,'dir'),   [status, msg, msgID] = mkdir(fig_dir), end
+if ~exist(png_dir,'dir'),   [status, msg, msgID] = mkdir(png_dir), end 
+
 %
 % Process each file in turn
 %
@@ -52,7 +60,7 @@ for fk = 1:Nfiles
         if TESTING
             disp('opening TEST_DATA');
             cir_file = TEST_DATA;
-            mat_fname = [TEST_DATA.Strct_Metadata.MatFile_str '.mat'];
+            mat_fname = [TEST_DATA.Strct_Metadata.MatFile_str '_pp.mat'];
         else
             mat_fname = files(fk).name;             
             cir_file_path = [arr_dir '\' mat_fname]; 
@@ -138,14 +146,6 @@ for fk = 1:Nfiles
         cir_avg_st(cir_class_ii).angle = [];
     end
 
-    % setup output directories
-    stats_dir = 'stats';
-    fig_dir = 'figs';
-    png_dir = 'png';
-    if ~exist(stats_dir,'dir'), mkdir(stats_dir), end;
-    if ~exist(fig_dir,'dir'),   mkdir(fig_dir), end;
-    if ~exist(png_dir,'dir'),   mkdir(png_dir), end; 
-
     %
     % ANTENNA DATA
     % 
@@ -161,6 +161,21 @@ for fk = 1:Nfiles
     % Loop through all records within the file
     %
     for kk = 1:NN
+
+        % get the meta data from the manifest
+        u = obj.manifest_tbl(strip(obj.manifest_tbl.filename) == strip(mat_fname), :);
+        if isempty(u)
+            error('data not found in manifest table')
+        else
+            metrics_arr{m_kk, MeasurementRunMetric.ID} = u.ID;
+            metrics_arr{m_kk, MeasurementRunMetric.Site} = u.Location;
+            metrics_arr{m_kk, MeasurementRunMetric.TxPos} = u.TxPos;
+            metrics_arr{m_kk, MeasurementRunMetric.TxHeight} = u.TxHeight;
+            metrics_arr{m_kk, MeasurementRunMetric.Freq} = u.Fc;
+            metrics_arr{m_kk, MeasurementRunMetric.Polarization} = u.Pol;
+            metrics_arr{m_kk, MeasurementRunMetric.Obstructed} = u.Obstructed;
+            metrics_arr{m_kk, MeasurementRunMetric.Waveguided} = u.Waveguided;
+        end        
         
         % range of the CIR data record
         r = cir_file.IQdata_Range_m(kk,3);
@@ -188,6 +203,19 @@ for fk = 1:Nfiles
         end
         USE(kk) = 1;
 
+        % NTAP Reduction
+        if obj.OPTS(obj.OPT_NTAP_APPROX)
+            [r_t,r_h,r_ph] =reduce_taps(cir, obj.NtapApprox_N);
+            reduced_cir_arr(size(reduced_cir_arr,1)+1, :) = [r_t(:).',r_h(:).',r_ph(:).'];
+        end
+
+        % record frequency
+        metrics_arr{m_kk, MeasurementRunMetric.Freq} = meta.Frequency_GHz_num;        
+
+        % record the range
+        metrics_arr{m_kk, MeasurementRunMetric.Range_m} = r;   
+        metrics_arr{m_kk, MeasurementRunMetric.Range_l} = physconst('LightSpeed')/r;
+
         % Compute the path loss in the cir
         % note that the CIR contains antenna gains.  We must remove the
         % bulk antenna gains using the assumption that the gain is
@@ -199,23 +227,14 @@ for fk = 1:Nfiles
             path_gain_dB(kk) = obj.compute_path_gain(cir, ...
                 TransmitterAntennaGain_dBi, ...
                 ReceiverAntennaGain_dBi); 
+            metrics_arr{m_kk, MeasurementRunMetric.PathGain} = path_gain_dB(kk);
         end           
-
-        % record the path gain
-        metrics_arr(m_kk,MeasurementRunMetric.PathGain) = path_gain_dB(kk);
-
-        % grab a reduced tap cir
-        cir_mag2_red = abs(cir(1:256)).^2;
-        % [cir_red_tap_t,cir_red_tap_h,cir_red_tap_ph] = reduce_taps(cir_mag2_red, obj.NtapApprox_N);
-        % cir_red_tap_h = cir_mag2_red;
-        cir_red_tap_h=resample(cir(1:256),1,4);
-        reduced_cir_arr(m_kk,:) = cir_red_tap_h;
 
         % record the X and Y coordinates
         coord_x = cir_file.IQdata_Range_m(kk,4);
         coord_y = cir_file.IQdata_Range_m(kk,5);
-        metrics_arr(m_kk,MeasurementRunMetric.CoordX) = coord_x;
-        metrics_arr(m_kk,MeasurementRunMetric.CoordY) = coord_y;        
+        metrics_arr{m_kk,MeasurementRunMetric.CoordX} = coord_x;
+        metrics_arr{m_kk,MeasurementRunMetric.CoordY} = coord_y;        
         
         % compute delay spread parameters of the CIR 
         % because of the wrapping of energy in the FFT-based
@@ -223,9 +242,9 @@ for fk = 1:Nfiles
         if obj.OPTS(obj.OPT_DELAY_SPREAD)
             [mean_delay_sec(kk), rms_delay_spread_sec(kk), cir_duration(kk)] = ...
                 obj.compute_delay_spread(Ts, cir);
-            metrics_arr(m_kk,MeasurementRunMetric.MeanDelay) = mean_delay_sec(kk);
-            metrics_arr(m_kk,MeasurementRunMetric.RMSDelaySpread) = rms_delay_spread_sec(kk);
-            metrics_arr(m_kk,MeasurementRunMetric.MaxDelay) = cir_duration(kk);
+            metrics_arr{m_kk,MeasurementRunMetric.MeanDelay} = mean_delay_sec(kk);
+            metrics_arr{m_kk,MeasurementRunMetric.RMSDelaySpread} = rms_delay_spread_sec(kk);
+            metrics_arr{m_kk,MeasurementRunMetric.MaxDelay} = cir_duration(kk);
         end        
 
         % compute the K factor assuming Rician channel
@@ -233,8 +252,8 @@ for fk = 1:Nfiles
         % where the peak occurs within 8 samples of beginning of the CIR 
         if obj.OPTS(obj.OPT_KFACTOR) || obj.OPTS(obj.OPT_AVGCIR)
             [K(kk), LOS(kk), k_pks] = obj.compute_k_factor(cir, ns);
-            metrics_arr(m_kk,MeasurementRunMetric.RicianK) = K(kk);
-            metrics_arr(m_kk,MeasurementRunMetric.LOS) = LOS(kk);
+            metrics_arr{m_kk,MeasurementRunMetric.RicianK} = K(kk);
+            metrics_arr{m_kk,MeasurementRunMetric.LOS} = LOS(kk);
         end
         
         % Aggregate the sums for later computation of avg CIR
@@ -276,37 +295,15 @@ for fk = 1:Nfiles
     end
 
     % write the ai metrics to file
-    metrics_tbl = array2table(metrics_arr, 'VariableNames',obj.metrics_tbl_colnames);    
-    % ai_metrics_fname = [stats_dir '/' mat_fname(1:end-4) '_aimetrics.csv'];
-    % writetable(metrics_tbl, ai_metrics_fname, 'WriteMode','overwrite');
+    metrics_tbl = cell2table(metrics_arr, 'VariableNames', MeasurementRunMetric.getNames());    
     ai_metrics_fname = [stats_dir '/' obj.AI_METRICS_FNAME_OUT];
     writetable(metrics_tbl, ai_metrics_fname, 'WriteMode','append');
 
-    % write the reduced cirs to file
-    reduced_cir_arr = [metrics_arr(:,1:obj.NBaseColumnNames) reduced_cir_arr];
-    red_cir_tbl = array2table(reduced_cir_arr);
-    red_cir_tbl.Properties.VariableNames(1:obj.NBaseColumnNames) = obj.metrics_tbl_colnames(1:obj.NBaseColumnNames);
-    % red_cir_fname = [stats_dir '/' mat_fname(1:end-4) '_redcirs.csv'];
-    % writetable(red_cir_tbl, red_cir_fname, 'WriteMode','overwrite');  
-    red_cir_fname = [stats_dir '/' obj.AI_REDTAP_FNAME_OUT];
-    writetable(red_cir_tbl, red_cir_fname, 'WriteMode','append'); 
-    
-    % % write the ai metrics to file
-    % ai_metrics_fname = [stats_dir '/' mat_fname(1:end-4) '_aimetrics.xlsx'];
-    % metrics_tbl_colnames = { ...
-    %     'CoordX', 'CoordY', 'LOS', 'RicianK', ...
-    %     'RMSDelaySpread', 'MeanDelay', 'MaxDelay', 'PathGain'};   
-    % metrics_tbl_vartypes = {'double', 'double', 'double', 'double', 'double', 'double', 'double', 'double' };
-    % metrics_tbl = array2table(metrics_arr, 'VariableNames',metrics_tbl_colnames);
-    % writetable(metrics_tbl, ai_metrics_fname, 'WriteMode','overwrite');
-    % 
-    % % write the reduced cirs to file
-    % red_cir_fname = [stats_dir '/' mat_fname(1:end-4) '_redcirs.xlsx'];
-    % reduced_cir_arr = [metrics_arr(:,1:8) reduced_cir_arr];
-    % red_cir_tbl = array2table(reduced_cir_arr);
-    % red_cir_tbl.Properties.VariableNames(1:8) = metrics_tbl_colnames;
-    % writetable(red_cir_tbl, red_cir_fname, 'WriteMode','overwrite');
-    
+    % write the reduced tap cir file to file
+    reduced_cir_with_labels_arr = [metrics_tbl(:,1:MeasurementRunMetric.getNumBaseColumns()), num2cell(reduced_cir_arr)];
+    ai_redcir_fname = [stats_dir '/' obj.AI_CIR_FNAME_OUT];
+    writetable(reduced_cir_with_labels_arr, ai_redcir_fname, 'WriteMode','append');    
+        
     %
     % Extract range data for off-line analysis
     %

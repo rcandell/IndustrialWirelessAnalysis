@@ -90,7 +90,7 @@ for fk = 1:Nfiles
     ns = meta.PNOversample_num;             % oversample rate
     t = (0:Ts:Ts*(wl-1));% -Ts*pn_over;     % time array over a burst transmission
     f = meta.Frequency_GHz_num;
-    lambda_m = 299792458/(f*1e9);
+    lambda_m = physconst('LightSpeed')/(f*1e9);
     
     %NN = apf*rpa;
     NN = size(cir_file.IQdata,2);
@@ -156,7 +156,7 @@ for fk = 1:Nfiles
     close(gcf)      
     
     % metrics table 
-    metrics_arr = [];
+    metrics_arr = {};
     reduced_cir_arr = [];
     m_kk = 1;
     
@@ -164,6 +164,21 @@ for fk = 1:Nfiles
     % Loop through all records within the file
     %
     for kk = 1:NN
+
+        % get the meta data from the manifest
+        u = obj.manifest_tbl(obj.manifest_tbl.filename == mat_fname, :);
+        if isempty(u)
+            error('data not found in manifest table')
+        else
+            metrics_arr{m_kk, MeasurementRunMetric.ID} = u.ID;
+            metrics_arr{m_kk, MeasurementRunMetric.Site} = u.Location;
+            metrics_arr{m_kk, MeasurementRunMetric.TxPos} = u.TxPos;
+            metrics_arr{m_kk, MeasurementRunMetric.TxHeight} = u.TxHeight;
+            metrics_arr{m_kk, MeasurementRunMetric.Freq} = u.Fc;
+            metrics_arr{m_kk, MeasurementRunMetric.Polarization} = u.Pol;
+            metrics_arr{m_kk, MeasurementRunMetric.Obstructed} = u.Obstructed;
+            metrics_arr{m_kk, MeasurementRunMetric.Waveguided} = u.Waveguided;
+        end
         
         % position of the CIR data record
         k_pos = mod(kk-1,NX)+1;
@@ -171,7 +186,8 @@ for fk = 1:Nfiles
                 cir_file.IQdata_CloudLocations_m_num.yPositions(k_pos) ];
             
         % distance from origin in wavelengths
-        r(kk) = sqrt(sum(POS.^2))/lambda_m;
+        r_m(kk) = sqrt(sum(POS.^2));
+        r(kk) = r_m(kk)/lambda_m;
         
         % extract the CIR for this record from the data file
         cir = cir_file.IQdata(:,kk);
@@ -196,25 +212,18 @@ for fk = 1:Nfiles
         USE(kk) = 1; 
 
         % record frequency
-        metrics_arr(m_kk, MeasurementRunMetric.Freq) = f;
+        metrics_arr{m_kk, MeasurementRunMetric.Freq} = f;
+
+        % record the range
+        metrics_arr{m_kk, MeasurementRunMetric.Range_m} = r_m(kk);
+        metrics_arr{m_kk, MeasurementRunMetric.Range_l} = r(kk);
 
         % record the antenna position
         % record the X and Y coordinates
-        % metrics_arr(m_kk,MeasurementRunMetric.CoordX) = meta.Rx_xyz_m_cll{1};
-        % metrics_arr(m_kk,MeasurementRunMetric.CoordY) = meta.Rx_xyz_m_cll{2};            
-        metrics_arr(m_kk,MeasurementRunMetric.CoordX) = POS(1);
-        metrics_arr(m_kk,MeasurementRunMetric.CoordY) = POS(2);
-
-        % record the path gain
-        metrics_arr(m_kk,MeasurementRunMetric.PathGain) = nan;        
-
-        % grab a reduced tap cir
-        cir_mag2_red = abs(cir(1:256)).^2;
-        % [cir_red_tap_t,cir_red_tap_h,cir_red_tap_ph] = ...
-        %       reduce_taps(cir_mag2_red, obj.NtapApprox_N);
-        % cir_red_tap_h = cir_mag2_red;
-        cir_red_tap_h=resample(cir(1:256),1,4);
-        reduced_cir_arr(m_kk,:) = cir_red_tap_h;      
+        % metrics_arr{m_kk,MeasurementRunMetric.CoordX} = meta.Rx_xyz_m_cll{1};
+        % metrics_arr{m_kk,MeasurementRunMetric.CoordY} = meta.Rx_xyz_m_cll{2};            
+        metrics_arr{m_kk,MeasurementRunMetric.CoordX} = POS(1);
+        metrics_arr{m_kk,MeasurementRunMetric.CoordY} = POS(2);        
         
         % compute delay spread parameters of the CIR 
         % because of the wrapping of energy in the FFT-based
@@ -223,9 +232,9 @@ for fk = 1:Nfiles
             if pk_pwr > -100
                 [mean_delay_sec(kk), rms_delay_spread_sec(kk), cir_duration(kk)] = ...
                     obj.compute_delay_spread(Ts, cir);
-                metrics_arr(m_kk,MeasurementRunMetric.MeanDelay) = mean_delay_sec(kk);
-                metrics_arr(m_kk,MeasurementRunMetric.RMSDelaySpread) = rms_delay_spread_sec(kk);
-                metrics_arr(m_kk,MeasurementRunMetric.MaxDelay) = cir_duration(kk);                
+                metrics_arr{m_kk,MeasurementRunMetric.MeanDelay} = mean_delay_sec(kk);
+                metrics_arr{m_kk,MeasurementRunMetric.RMSDelaySpread} = rms_delay_spread_sec(kk);
+                metrics_arr{m_kk,MeasurementRunMetric.MaxDelay} = cir_duration(kk);                
             end
         end    
 
@@ -234,8 +243,8 @@ for fk = 1:Nfiles
         % where the peak occurs within 8 samples of beginning of the CIR 
         if obj.OPTS(obj.OPT_KFACTOR) || obj.OPTS(obj.OPT_AVGCIR)
             [K(kk), LOS(kk), k_pks] = obj.compute_k_factor(cir, ns);
-            metrics_arr(m_kk,MeasurementRunMetric.RicianK) = K(kk);
-            metrics_arr(m_kk,MeasurementRunMetric.LOS) = LOS(kk);
+            metrics_arr{m_kk,MeasurementRunMetric.RicianK} = K(kk);
+            metrics_arr{m_kk,MeasurementRunMetric.LOS} = LOS(kk);
         end   
 
         % Aggregate the sums for later computation of avg CIR
@@ -273,7 +282,7 @@ for fk = 1:Nfiles
             path_gain_dB(kk) = obj.compute_path_gain(cir, ...
                 TransmitterAntennaGain_dBi, ...
                 ReceiverAntennaGain_dBi);   
-            metrics_arr(m_kk, MeasurementRunMetric.PathGain) = path_gain_dB(kk);
+            metrics_arr{m_kk, MeasurementRunMetric.PathGain} = path_gain_dB(kk);
         end
         
         % Aggregate the sums for later computation of avg CIR
@@ -296,7 +305,7 @@ for fk = 1:Nfiles
     
     %
     % determine if the run produced enough data to form estimates.  The
-    % selection of threshold was chosen arbitrarily
+    % selection of threshold was chosen arbitrametrics_arrrily
     %
     if sum(~isnan(USE)) < 100
         warning 'not enough CIRs passed selection to form metrics'
@@ -305,20 +314,9 @@ for fk = 1:Nfiles
     end
 
     % write the ai metrics to file
-    metrics_tbl = array2table(metrics_arr, 'VariableNames',obj.metrics_tbl_colnames);    
-    % ai_metrics_fname = [stats_dir '/' mat_fname(1:end-4) '_aimetrics.csv'];
-    % writetable(metrics_tbl, ai_metrics_fname, 'WriteMode','overwrite');
+    metrics_tbl = cell2table(metrics_arr, 'VariableNames', MeasurementRunMetric.getNames());    
     ai_metrics_fname = [stats_dir '/' obj.AI_METRICS_FNAME_OUT];
     writetable(metrics_tbl, ai_metrics_fname, 'WriteMode','append');
-
-    % write the reduced cirs to file
-    reduced_cir_arr = [metrics_arr(:,1:obj.NBaseColumnNames) reduced_cir_arr];
-    red_cir_tbl = array2table(reduced_cir_arr);
-    red_cir_tbl.Properties.VariableNames(1:obj.NBaseColumnNames) = obj.metrics_tbl_colnames(1:obj.NBaseColumnNames);
-    % red_cir_fname = [stats_dir '/' mat_fname(1:end-4) '_redcirs.csv'];
-    % writetable(red_cir_tbl, red_cir_fname, 'WriteMode','overwrite');  
-    red_cir_fname = [stats_dir '/' obj.AI_REDTAP_FNAME_OUT];
-    writetable(red_cir_tbl, red_cir_fname, 'WriteMode','append');  
     
     if OPTS(OPT_PATH_GAIN)
     %
